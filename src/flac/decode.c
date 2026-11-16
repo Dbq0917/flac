@@ -1829,9 +1829,12 @@ void metadata_callback(const FLAC__StreamDecoder *decoder, const FLAC__StreamMet
 void error_callback(const FLAC__StreamDecoder *decoder, FLAC__StreamDecoderErrorStatus status, void *client_data)
 {
 	DecoderSession *decoder_session = (DecoderSession*)client_data;
-	(void)decoder;
+	FLAC__uint64 position;
 	if(!decoder_session->error_callback_suppress_messages) {
-		flac__utils_printf_clear_stats(stderr, 1, "%s: *** Got error code %d:%s after processing %" PRIu64 " samples\n", decoder_session->inbasefilename, status, FLAC__StreamDecoderErrorStatusString[status], decoder_session->samples_processed);
+		if(FLAC__stream_decoder_get_decode_position(decoder, &position))
+			flac__utils_printf_clear_stats(stderr, 1, "%s: *** Got error code %d:%s after processing %" PRIu64 " samples at offset %" PRIu64 " bytes\n", decoder_session->inbasefilename, status, FLAC__StreamDecoderErrorStatusString[status], decoder_session->samples_processed, position);
+		else
+			flac__utils_printf_clear_stats(stderr, 1, "%s: *** Got error code %d:%s after processing %" PRIu64 " samples\n", decoder_session->inbasefilename, status, FLAC__StreamDecoderErrorStatusString[status], decoder_session->samples_processed);
 	}
 	if(!decoder_session->continue_through_decode_errors) {
 		/* if we got a sync error while looking for metadata, either it's not a FLAC file (more likely) or the file is corrupted */

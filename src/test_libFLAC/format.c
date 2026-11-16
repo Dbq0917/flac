@@ -25,6 +25,8 @@
 #include "FLAC/format.h"
 #include "format.h"
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 static const char *true_false_string_[2] = { "false", "true" };
 
@@ -195,6 +197,17 @@ static struct {
 	{ 5, (const FLAC__byte*)"a=\xe1\xa5\x80", true  }
 };
 
+static struct {
+	uint32_t length;
+	const FLAC__byte *string;
+} TRUNCATED_UTF8[] = {
+	{ 1, (const FLAC__byte*)"\xc2"                   },
+	{ 2, (const FLAC__byte*)"\xe1\x80"               },
+	{ 3, (const FLAC__byte*)"\xf1\x80\x80"           },
+	{ 4, (const FLAC__byte*)"\xf8\x80\x80\x80"       },
+	{ 5, (const FLAC__byte*)"\xfc\x80\x80\x80\x80"   }
+};
+
 FLAC__bool test_format(void)
 {
 	uint32_t i;
@@ -253,6 +266,43 @@ FLAC__bool test_format(void)
 			return false;
 		}
 		printf("OK\n");
+	}
+
+	/* Copy truncated sequences into exactly-sized buffers so ASan catches
+	 * any read beyond the length-delimited string. */
+	for(i = 0; i < sizeof(TRUNCATED_UTF8)/sizeof(TRUNCATED_UTF8[0]); i++) {
+		FLAC__byte *value = malloc(TRUNCATED_UTF8[i].length);
+		FLAC__byte *entry = malloc(2 + TRUNCATED_UTF8[i].length);
+		if(value == NULL || entry == NULL) {
+			free(value);
+			free(entry);
+			printf("FAILED, out of memory\n");
+			return false;
+		}
+		memcpy(value, TRUNCATED_UTF8[i].string, TRUNCATED_UTF8[i].length);
+		memcpy(entry, "a=", 2);
+		memcpy(entry + 2, TRUNCATED_UTF8[i].string, TRUNCATED_UTF8[i].length);
+
+		printf("testing truncated length-delimited UTF-8 value (%u bytes)... ", TRUNCATED_UTF8[i].length);
+		if(FLAC__format_vorbiscomment_entry_value_is_legal(value, TRUNCATED_UTF8[i].length)) {
+			printf("FAILED, accepted truncated sequence\n");
+			free(value);
+			free(entry);
+			return false;
+		}
+		printf("OK\n");
+
+		printf("testing truncated length-delimited UTF-8 entry (%u bytes)... ", 2 + TRUNCATED_UTF8[i].length);
+		if(FLAC__format_vorbiscomment_entry_is_legal(entry, 2 + TRUNCATED_UTF8[i].length)) {
+			printf("FAILED, accepted truncated sequence\n");
+			free(value);
+			free(entry);
+			return false;
+		}
+		printf("OK\n");
+
+		free(value);
+		free(entry);
 	}
 
 	printf("\nPASSED!\n");

@@ -25,6 +25,7 @@ check_SCRIPTS = \
 	test_libFLAC++.sh \
 	test_grabbag.sh \
 	test_flac.sh \
+	test_malformed.sh \
 	test_metaflac.sh \
 	test_replaygain.sh \
 	test_seeking.sh \
@@ -39,6 +40,7 @@ if FLaC__WITH_CPPLIBS
 endif
 	$(TESTS_ENVIRONMENT) $(srcdir)/test_grabbag.sh
 	$(TESTS_ENVIRONMENT) $(srcdir)/test_flac.sh
+	$(TESTS_ENVIRONMENT) $(srcdir)/test_malformed.sh
 	$(TESTS_ENVIRONMENT) $(srcdir)/test_metaflac.sh
 	$(TESTS_ENVIRONMENT) $(srcdir)/test_replaygain.sh
 	$(TESTS_ENVIRONMENT) $(srcdir)/test_seeking.sh
@@ -56,6 +58,13 @@ EXTRA_DIST = \
 	metaflac.flac.ok \
 	picture.ok \
 	$(check_SCRIPTS) \
+	security-regression/README.md \
+	security-regression/cuesheet-256-indices.cue \
+	security-regression/generate_rice_unary_limit.py \
+	security-regression/rice-unary-limit-padding-6900.flac \
+	security-regression/rice-unary-limit-padding-7628.flac \
+	security-regression/rice-unary-limit-tail.flac \
+	security-regression/run_decoder_bounded.sh \
 	write_iff.pl
 
 clean-local:

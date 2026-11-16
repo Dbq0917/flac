@@ -67,6 +67,8 @@ struct FLAC__BitReader {
 };
 
 static FLAC__bool read_callback(FLAC__byte buffer[], size_t *bytes, void *data);
+static FLAC__bool rice_read_callback(FLAC__byte buffer[], size_t *bytes, void *data);
+static FLAC__bool test_rice_limits_(void);
 
 static void FLAC__bitreader_dump(const FLAC__BitReader *br, FILE *out)
 {
@@ -330,6 +332,13 @@ FLAC__bool test_bitreader(void)
 	printf("OK\n");
 	FLAC__bitreader_dump(br, stdout);
 
+	printf("testing rice unary length limits across read boundaries... ");
+	if(!test_rice_limits_()) {
+		printf("FAILED\n");
+		return false;
+	}
+	printf("OK\n");
+
 	printf("testing free... ");
 	FLAC__bitreader_free(br);
 	printf("OK\n");
@@ -343,6 +352,97 @@ FLAC__bool test_bitreader(void)
 }
 
 /*----------------------------------------------------------------------------*/
+
+static const FLAC__byte *rice_input;
+static size_t rice_input_length;
+static size_t rice_input_position;
+static size_t rice_read_chunk;
+
+static FLAC__bool rice_read_callback(FLAC__byte buffer[], size_t *bytes, void *data)
+{
+	size_t n = *bytes;
+
+	(void)data;
+	if(rice_read_chunk > 0 && n > rice_read_chunk)
+		n = rice_read_chunk;
+	if(n > rice_input_length - rice_input_position)
+		n = rice_input_length - rice_input_position;
+	if(n == 0) {
+		*bytes = 0;
+		return false;
+	}
+	memcpy(buffer, rice_input + rice_input_position, n);
+	rice_input_position += n;
+	*bytes = n;
+	return true;
+}
+
+static void set_bit_(FLAC__byte *buffer, size_t bit)
+{
+	buffer[bit / 8] |= (FLAC__byte)(0x80u >> (bit % 8));
+}
+
+static FLAC__bool read_rice_values_(const FLAC__byte *data, size_t length, size_t chunk, int *values, uint32_t count, uint32_t parameter)
+{
+	FLAC__BitReader *br = FLAC__bitreader_new();
+	FLAC__bool ok;
+
+	if(br == NULL)
+		return false;
+	rice_input = data;
+	rice_input_length = length;
+	rice_input_position = 0;
+	rice_read_chunk = chunk;
+	if(!FLAC__bitreader_init(br, rice_read_callback, NULL)) {
+		FLAC__bitreader_delete(br);
+		return false;
+	}
+	ok = FLAC__bitreader_read_rice_signed_block(br, values, count, parameter);
+	FLAC__bitreader_delete(br);
+	return ok;
+}
+
+static FLAC__bool test_rice_limits_(void)
+{
+	static const size_t chunks[] = { 0, 1, 7, 13, 64 };
+	FLAC__byte overlimit[520];
+	FLAC__byte valid[2] = { 0x36, 0xc0 }; /* 2 / 5 and 0 / 3 with parameter 3 */
+	FLAC__byte edge[520];
+	int values[2];
+	uint32_t i;
+
+	memset(overlimit, 0, sizeof(overlimit));
+	set_bit_(overlimit, 4096); /* quotient 4096, one above UINT32_MAX >> 20 */
+	for(i = 0; i < sizeof(chunks)/sizeof(chunks[0]); i++) {
+		values[0] = 0;
+		if(read_rice_values_(overlimit, sizeof(overlimit), chunks[i], values, 1, 20)) {
+			printf("over-limit quotient %u accepted with chunk size %u\n", values[0], (uint32_t)chunks[i]);
+			return false;
+		}
+	}
+
+	/* A code that crosses a byte boundary must still compose bit-exactly. */
+	for(i = 0; i < sizeof(chunks)/sizeof(chunks[0]); i++) {
+		values[0] = values[1] = 0;
+		if(!read_rice_values_(valid, sizeof(valid), chunks[i], values, 2, 3) || values[0] != -11 || values[1] != -2) {
+			printf("valid crossing code decoded as %d,%d with chunk size %u\n", values[0], values[1], (uint32_t)chunks[i]);
+			return false;
+		}
+	}
+
+	/* Exactly the limit is valid; the check must reject only limit + 1. */
+	memset(edge, 0, sizeof(edge));
+	set_bit_(edge, 4095);
+	for(i = 0; i < sizeof(chunks)/sizeof(chunks[0]); i++) {
+		values[0] = 0;
+		if(!read_rice_values_(edge, sizeof(edge), chunks[i], values, 1, 20) || values[0] != 2146959360) {
+			printf("limit quotient decoded as %d with chunk size %u\n", values[0], (uint32_t)chunks[i]);
+			return false;
+		}
+	}
+
+	return true;
+}
 
 static FLAC__bool read_callback(FLAC__byte buffer[], size_t *bytes, void *data)
 {

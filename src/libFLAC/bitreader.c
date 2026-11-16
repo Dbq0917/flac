@@ -722,6 +722,78 @@ FLAC__bool FLAC__bitreader_read_byte_block_aligned_no_crc(FLAC__BitReader *br, F
 	return true;
 }
 
+static FLAC__bool bitreader_read_unary_unsigned_limited_(FLAC__BitReader *br, uint32_t *val, uint32_t limit)
+{
+	FLAC__uint64 count = 0;
+	uint32_t i;
+
+	FLAC__ASSERT(0 != br);
+	FLAC__ASSERT(0 != br->buffer);
+
+	*val = 0;
+	while(1) {
+		while(br->consumed_words < br->words) { /* if we've not consumed up to a partial tail word... */
+			brword b = br->consumed_bits < FLAC__BITS_PER_WORD ? br->buffer[br->consumed_words] << br->consumed_bits : 0;
+			if(b) {
+				i = COUNT_ZERO_MSBS(b);
+				if((FLAC__uint64)i > (FLAC__uint64)limit - count)
+					return false;
+				count += i;
+				i++;
+				br->consumed_bits += i;
+				if(br->consumed_bits >= FLAC__BITS_PER_WORD) { /* faster way of testing if(br->consumed_bits == FLAC__BITS_PER_WORD) */
+					br->consumed_words++;
+					br->consumed_bits = 0;
+				}
+				*val = (uint32_t)count;
+				return true;
+			}
+			else {
+				const uint32_t zeros = FLAC__BITS_PER_WORD - br->consumed_bits;
+				if((FLAC__uint64)zeros > (FLAC__uint64)limit - count)
+					return false;
+				count += zeros;
+				br->consumed_words++;
+				br->consumed_bits = 0;
+				/* didn't find stop bit yet, have to keep going... */
+			}
+		}
+		/* at this point we've eaten up all the whole words; have to try
+		 * reading through any tail bytes before calling the read callback.
+		 * this is a repeat of the above logic adjusted for the fact we
+		 * don't have a whole word.  note though if the client is feeding
+		 * us data a byte at a time (unlikely), br->consumed_bits may not
+		 * be zero.
+		 */
+		if(br->bytes*8 > br->consumed_bits) {
+			const uint32_t end = br->bytes * 8;
+			brword b = (br->buffer[br->consumed_words] & (FLAC__WORD_ALL_ONES << (FLAC__BITS_PER_WORD-end))) << br->consumed_bits;
+			if(b) {
+				i = COUNT_ZERO_MSBS(b);
+				if((FLAC__uint64)i > (FLAC__uint64)limit - count)
+					return false;
+				count += i;
+				i++;
+				br->consumed_bits += i;
+				FLAC__ASSERT(br->consumed_bits < FLAC__BITS_PER_WORD);
+				*val = (uint32_t)count;
+				return true;
+			}
+			else {
+				const uint32_t zeros = end - br->consumed_bits;
+				if((FLAC__uint64)zeros > (FLAC__uint64)limit - count)
+					return false;
+				count += zeros;
+				br->consumed_bits = end;
+				FLAC__ASSERT(br->consumed_bits < FLAC__BITS_PER_WORD);
+				/* didn't find stop bit yet, have to keep going... */
+			}
+		}
+		if(!bitreader_read_from_client_(br))
+			return false;
+	}
+}
+
 FLAC__bool FLAC__bitreader_read_unary_unsigned(FLAC__BitReader *br, uint32_t *val)
 #if 0 /* slow but readable version */
 {
@@ -743,61 +815,7 @@ FLAC__bool FLAC__bitreader_read_unary_unsigned(FLAC__BitReader *br, uint32_t *va
 }
 #else
 {
-	uint32_t i;
-
-	FLAC__ASSERT(0 != br);
-	FLAC__ASSERT(0 != br->buffer);
-
-	*val = 0;
-	while(1) {
-		while(br->consumed_words < br->words) { /* if we've not consumed up to a partial tail word... */
-			brword b = br->consumed_bits < FLAC__BITS_PER_WORD ? br->buffer[br->consumed_words] << br->consumed_bits : 0;
-			if(b) {
-				i = COUNT_ZERO_MSBS(b);
-				*val += i;
-				i++;
-				br->consumed_bits += i;
-				if(br->consumed_bits >= FLAC__BITS_PER_WORD) { /* faster way of testing if(br->consumed_bits == FLAC__BITS_PER_WORD) */
-					br->consumed_words++;
-					br->consumed_bits = 0;
-				}
-				return true;
-			}
-			else {
-				*val += FLAC__BITS_PER_WORD - br->consumed_bits;
-				br->consumed_words++;
-				br->consumed_bits = 0;
-				/* didn't find stop bit yet, have to keep going... */
-			}
-		}
-		/* at this point we've eaten up all the whole words; have to try
-		 * reading through any tail bytes before calling the read callback.
-		 * this is a repeat of the above logic adjusted for the fact we
-		 * don't have a whole word.  note though if the client is feeding
-		 * us data a byte at a time (unlikely), br->consumed_bits may not
-		 * be zero.
-		 */
-		if(br->bytes*8 > br->consumed_bits) {
-			const uint32_t end = br->bytes * 8;
-			brword b = (br->buffer[br->consumed_words] & (FLAC__WORD_ALL_ONES << (FLAC__BITS_PER_WORD-end))) << br->consumed_bits;
-			if(b) {
-				i = COUNT_ZERO_MSBS(b);
-				*val += i;
-				i++;
-				br->consumed_bits += i;
-				FLAC__ASSERT(br->consumed_bits < FLAC__BITS_PER_WORD);
-				return true;
-			}
-			else {
-				*val += end - br->consumed_bits;
-				br->consumed_bits = end;
-				FLAC__ASSERT(br->consumed_bits < FLAC__BITS_PER_WORD);
-				/* didn't find stop bit yet, have to keep going... */
-			}
-		}
-		if(!bitreader_read_from_client_(br))
-			return false;
-	}
+	return bitreader_read_unary_unsigned_limited_(br, val, UINT32_MAX);
 }
 #endif
 

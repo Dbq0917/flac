@@ -1085,7 +1085,8 @@ FLAC_API uint32_t FLAC__stream_decoder_get_blocksize(const FLAC__StreamDecoder *
  *  The position is the byte offset from the start of the stream.
  *  Bytes before this position have been fully decoded.  Note that
  *  there may still be undecoded bytes in the decoder's read FIFO.
- *  The returned position is correct even after a seek.
+ *  The returned position is correct even after a seek or a bit-level
+ *  parsing error, in which case it is rounded down to the containing byte.
  *
  *  \warning This function currently only works for native FLAC,
  *           not Ogg FLAC streams.

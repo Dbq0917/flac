@@ -913,11 +913,14 @@ FLAC_API FLAC__bool FLAC__stream_decoder_get_decode_position(const FLAC__StreamD
 		return false;
 	if(decoder->private_->tell_callback(decoder, position, decoder->private_->client_data) != FLAC__STREAM_DECODER_TELL_STATUS_OK)
 		return false;
-	/* should never happen since all FLAC frames and metadata blocks are byte aligned, but check just in case */
-	if(!FLAC__bitreader_is_consumed_byte_aligned(decoder->private_->input))
-		return false;
-	FLAC__ASSERT(*position >= FLAC__stream_decoder_get_input_bytes_unconsumed(decoder));
-	*position -= FLAC__stream_decoder_get_input_bytes_unconsumed(decoder);
+	/* Round down if the reader is in the middle of a byte, e.g. when
+	 * reporting the position of a bit-level parsing error. */
+	{
+		const uint32_t unconsumed_bytes = FLAC__bitreader_get_input_bits_unconsumed(decoder->private_->input) / 8;
+		if(*position < unconsumed_bytes)
+			return false;
+		*position -= unconsumed_bytes;
+	}
 	return true;
 }
 

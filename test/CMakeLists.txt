@@ -63,6 +63,9 @@ if(BUILD_PROGRAMS)
     add_test(NAME flac
         COMMAND ${BUSYBOX_EXE} ${BUSYBOX_CMD} "${CMAKE_CURRENT_SOURCE_DIR}/test_flac.sh"
         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+    add_test(NAME malformed
+        COMMAND ${BUSYBOX_EXE} ${BUSYBOX_CMD} "${CMAKE_CURRENT_SOURCE_DIR}/test_malformed.sh"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
     # UTF-8 must be tested separately on Windows because busybox-w32 doesn't support UTF-8
     if(BUSYBOX_EXE)
         add_test(NAME flac_utf8_test COMMAND $<TARGET_FILE:flacapp> -t
@@ -90,7 +93,7 @@ if(BUILD_PROGRAMS)
         COMMAND ${BUSYBOX_EXE} ${BUSYBOX_CMD} "${CMAKE_CURRENT_SOURCE_DIR}/test_compression.sh"
         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
     set_tests_properties(flac metaflac replaygain seeking streams compression PROPERTIES DEPENDS generate_streams)
-    list(APPEND ALL_TESTS generate_streams flac metaflac replaygain seeking streams compression)
+    list(APPEND ALL_TESTS generate_streams flac metaflac replaygain seeking streams compression malformed)
 endif()
 
 

@@ -51,6 +51,8 @@
 		x = y = COUNT_ZERO_MSBS2(b);
 		if(x == FLAC__BITS_PER_WORD) {
 			x = ucbits;
+			if(x > limit)
+				return false;
 			do {
 				/* didn't find stop bit yet, have to keep going... */
 				cwords++;
@@ -58,6 +60,14 @@
 					goto incomplete_msbs;
 				b = br->buffer[cwords];
 				y = COUNT_ZERO_MSBS2(b);
+				if(y > limit - x) {
+					/* flush the read position for deterministic error reporting */
+					br->consumed_words = cwords;
+					br->consumed_bits = y >= FLAC__BITS_PER_WORD ? 0 : y;
+					if(y >= FLAC__BITS_PER_WORD)
+						br->consumed_words++;
+					return false;
+				}
 				x += y;
 			} while(y == FLAC__BITS_PER_WORD);
 		}
@@ -66,8 +76,16 @@
 		ucbits = (ucbits - x - 1) % FLAC__BITS_PER_WORD;
 		msbs = x;
 
-		if(x > limit)
+		if(x > limit) {
+			/* flush the read position for deterministic error reporting */
+			if(ucbits == 0) {
+				cwords++;
+				ucbits = FLAC__BITS_PER_WORD;
+			}
+			br->consumed_words = cwords;
+			br->consumed_bits = FLAC__BITS_PER_WORD - ucbits;
 			return false;
+		}
 
 		/* read the binary LSBs */
 		x = (FLAC__uint32)(b >> (FLAC__BITS_PER_WORD - parameter)); /* parameter < 32, so we can cast to 32-bit uint32_t */
@@ -102,7 +120,9 @@ incomplete_msbs:
 			}
 
 			/* read the unary MSBs and end bit */
-			if(!FLAC__bitreader_read_unary_unsigned(br, &msbs))
+			if(x > limit)
+				return false;
+			if(!bitreader_read_unary_unsigned_limited_(br, &msbs, limit - x))
 				return false;
 			msbs += x;
 			x = ucbits = 0;
