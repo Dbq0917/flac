@@ -63,6 +63,9 @@ if(BUILD_PROGRAMS)
     add_test(NAME flac
         COMMAND ${BUSYBOX_EXE} ${BUSYBOX_CMD} "${CMAKE_CURRENT_SOURCE_DIR}/test_flac.sh"
         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
+    add_test(NAME decode_container_detection
+        COMMAND ${BUSYBOX_EXE} ${BUSYBOX_CMD} "${CMAKE_CURRENT_SOURCE_DIR}/test_decode_container_detection.sh"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
     # UTF-8 must be tested separately on Windows because busybox-w32 doesn't support UTF-8
     if(BUSYBOX_EXE)
         add_test(NAME flac_utf8_test COMMAND $<TARGET_FILE:flacapp> -t
@@ -89,8 +92,8 @@ if(BUILD_PROGRAMS)
     add_test(NAME compression
         COMMAND ${BUSYBOX_EXE} ${BUSYBOX_CMD} "${CMAKE_CURRENT_SOURCE_DIR}/test_compression.sh"
         WORKING_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}")
-    set_tests_properties(flac metaflac replaygain seeking streams compression PROPERTIES DEPENDS generate_streams)
-    list(APPEND ALL_TESTS generate_streams flac metaflac replaygain seeking streams compression)
+    set_tests_properties(flac decode_container_detection metaflac replaygain seeking streams compression PROPERTIES DEPENDS generate_streams)
+    list(APPEND ALL_TESTS generate_streams flac decode_container_detection metaflac replaygain seeking streams compression)
 endif()
 
 

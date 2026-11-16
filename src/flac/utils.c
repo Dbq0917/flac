@@ -181,6 +181,20 @@ void flac__utils_printf(FILE *stream, int level, const char *format, ...)
 	}
 }
 
+FLAC__bool flac__utils_append_decode_log(const char *logfilename, const char *line)
+{
+	FILE *f;
+
+	if(0 == logfilename)
+		return true;
+
+	if(0 == (f = flac_fopen(logfilename, "a")))
+		return false;
+	fprintf(f, "%s\n", line);
+	fclose(f);
+	return true;
+}
+
 /* variables and functions for console status output */
 static FLAC__bool is_name_printed;
 static int stats_char_count = 0;

@@ -58,6 +58,11 @@ size_t flac__utils_fwrite(const void *ptr, size_t size, size_t nmemb, FILE *stre
 extern int flac__utils_verbosity_;
 void flac__utils_printf(FILE *stream, int level, const char *format, ...);
 
+/* Append one line to a decode log file, keeping a traceable record of
+ * decoding runs (e.g. for archival ingest).  Does nothing and returns
+ * true if logfilename is NULL.  Returns false on I/O error. */
+FLAC__bool flac__utils_append_decode_log(const char *logfilename, const char *line);
+
 int get_console_width(void);
 size_t strlen_console(const char *text);
 void stats_new_line(void);

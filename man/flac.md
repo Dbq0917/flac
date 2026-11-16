@@ -338,12 +338,27 @@ negated, see the **Negative options** section below.
 
 ## DECODING OPTIONS
 
+**\--decode-log**=FILE
+:	Append one line per decoded input file to FILE, recording the
+:	detected container (FLAC or Ogg FLAC, which is determined from the
+:	file contents, not the file name), the stream parameters (sample
+:	rate, channel count, bits per sample), the number of decoded
+:	samples, the MD5 check outcome and the result of the decode
+:	(ok, truncated or failed). This is useful to keep an auditable
+:	record when ingesting large batches of files.
+
 **-F**, **\--decode-through-errors**
 :	By default flac stops decoding with an error message and removes the
 	partially decoded file if it encounters a bitstream error. With -F,
 	errors are still printed but flac will continue decoding to
 	completion. Note that errors may cause the decoded audio to be
 	missing some samples or have silent sections.
+	Files that are truncated (i.e. the stream ends before all samples
+	declared in its STREAMINFO block were stored) are not treated as
+	errors: flac keeps the samples decoded so far, fixes up the output
+	file headers accordingly and only issues a warning, so that
+	partially transferred or partially recorded material can still be
+	used.
 
 **\--cue**=\[\#.#\]\[-\[\#.#\]\]
 :	Set the beginning and ending cuepoints to decode. Decimal points are

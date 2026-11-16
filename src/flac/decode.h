@@ -55,6 +55,7 @@ typedef struct {
 	FLAC__bool channel_map_none; /* --channel-map=none specified, eventually will expand to take actual channel map */
 	FLAC__bool relaxed_foreign_metadata_handling;
 	FileSubFormat force_subformat;
+	const char *decode_log; /* NULL unless --decode-log was specified; decoded results are appended to this file */
 
 	FileFormat format;
 	union {

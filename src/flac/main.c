@@ -28,6 +28,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <time.h>
 
 #ifdef HAVE_SYS_TIME_H
@@ -157,6 +158,7 @@ static struct share__option long_options_[] = {
 	{ "lax"                       , share__no_argument, 0, 0 },
 	{ "replay-gain"               , share__no_argument, 0, 0 },
 	{ "ignore-chunk-sizes"        , share__no_argument, 0, 0 },
+	{ "decode-log"                , share__required_argument, 0, 0 },
 	{ "seekpoint"                 , share__required_argument, 0, 'S' },
 	{ "padding"                   , share__required_argument, 0, 'P' },
 #if FLAC__HAS_OGG
@@ -266,6 +268,7 @@ static struct {
 	FLAC__bool utf8_convert; /* true by default, to convert tag strings from locale to utf-8, false if --no-utf8-convert used */
 	const char *cmdline_forced_outfilename;
 	const char *output_prefix;
+	const char *decode_log;
 	analysis_options aopts;
 	int padding; /* -1 => no -P options were given, 0 => -P- was given, else -P value */
 	size_t num_compression_settings;
@@ -632,6 +635,7 @@ FLAC__bool init_options(void)
 	option_values.utf8_convert = true;
 	option_values.cmdline_forced_outfilename = 0;
 	option_values.output_prefix = 0;
+	option_values.decode_log = 0;
 	option_values.aopts.do_residual_text = false;
 	option_values.aopts.do_residual_gnuplot = false;
 	option_values.padding = -1;
@@ -860,6 +864,10 @@ int parse_option(int short_option, const char *long_option, const char *option_a
 			option_values.serial_number = atol(option_argument);
 		}
 #endif
+		else if(0 == strcmp(long_option, "decode-log")) {
+			FLAC__ASSERT(0 != option_argument);
+			option_values.decode_log = option_argument;
+		}
 		else if(0 == strcmp(long_option, "endian")) {
 			FLAC__ASSERT(0 != option_argument);
 			if(0 == strncmp(option_argument, "big", strlen(option_argument)))
@@ -1353,6 +1361,9 @@ void show_help(void)
 	printf("Decoding options:\n");
 	printf("  -F, --decode-through-errors  Continue decoding through stream errors\n");
 	printf("      --cue=[#.#][-[#.#]]      Set the beginning and ending cuepoints to decode\n");
+	printf("      --decode-log=FILE        Append one log line per decoded file to FILE,\n");
+	printf("                               recording container, stream parameters, decoded\n");
+	printf("                               sample count and result (ok/truncated/failed)\n");
 #if FLAC__HAS_OGG
 	printf("      --decode-chained-stream  Decode all links in a chained Ogg stream, not\n");
 	printf("                               just the first one\n");
@@ -1819,6 +1830,54 @@ int encode_file(const char *infilename, FLAC__bool is_first_file, FLAC__bool is_
 	return retval;
 }
 
+/*
+ * Look at the first bytes of a file to find out what kind of stream it
+ * holds.  Archives may keep FLAC and Ogg FLAC streams side by side with
+ * arbitrary or misleading file name extensions, so the container must be
+ * detected from the contents, not from the file name.
+ */
+#define CONTAINER_UNKNOWN     0 /* cannot tell (stdin, pipe, unreadable file, ...) */
+#define CONTAINER_FLAC        1
+#define CONTAINER_OGG         2
+#define CONTAINER_UNSUPPORTED 3 /* readable file, but neither FLAC nor Ogg FLAC */
+static int sniff_container_format(const char *infilename)
+{
+	unsigned char magic[12];
+	struct flac_stat_s st;
+	FILE *f;
+	size_t n;
+
+	if(0 == strcmp(infilename, "-"))
+		return CONTAINER_UNKNOWN; /* cannot peek at stdin without consuming it */
+	if(0 != flac_stat(infilename, &st) || (st.st_mode & S_IFMT) != S_IFREG)
+		return CONTAINER_UNKNOWN; /* only sniff regular files, never consume from pipes */
+	if(0 == (f = flac_fopen(infilename, "rb")))
+		return CONTAINER_UNKNOWN;
+	n = fread(magic, 1, sizeof(magic), f);
+	fclose(f);
+	if(n >= 4 && 0 == memcmp(magic, FLAC__STREAM_SYNC_STRING, 4))
+		return CONTAINER_FLAC;
+	if(n >= 3 && 0 == memcmp(magic, "ID3", 3))
+		return CONTAINER_FLAC; /* the decoder skips an ID3v2 tag preceding the FLAC signature */
+	if(n >= 4 && 0 == memcmp(magic, "OggS", 4))
+		return CONTAINER_OGG;
+	return CONTAINER_UNSUPPORTED;
+}
+
+static void log_unsupported_format(const char *infilename)
+{
+	char line[4200];
+
+	if(0 == option_values.decode_log)
+		return;
+	snprintf(line, sizeof(line),
+		"file=%s output=- container=unknown sample_rate=0 channels=0 bits_per_sample=0 total_samples=0 decoded_samples=0 md5=unchecked status=failed detail=\"unsupported file format\"",
+		infilename
+	);
+	if(!flac__utils_append_decode_log(option_values.decode_log, line))
+		flac__utils_printf(stderr, 1, "%s: WARNING, could not write to decode log %s\n", infilename, option_values.decode_log);
+}
+
 int decode_file(const char *infilename)
 {
 	int retval;
@@ -1975,12 +2034,31 @@ int decode_file(const char *infilename)
 	infilename_length = strlen(infilename);
 	if(option_values.use_ogg)
 		treat_as_ogg = true;
-	else if(infilename_length >= 4 && 0 == FLAC__STRCASECMP(infilename+(infilename_length-4), ".oga"))
-		treat_as_ogg = true;
-	else if(infilename_length >= 4 && 0 == FLAC__STRCASECMP(infilename+(infilename_length-4), ".ogg"))
-		treat_as_ogg = true;
-	else
-		treat_as_ogg = false;
+	else {
+		switch(sniff_container_format(infilename)) {
+			case CONTAINER_FLAC:
+				treat_as_ogg = false;
+				break;
+			case CONTAINER_OGG:
+				treat_as_ogg = true;
+				break;
+			case CONTAINER_UNSUPPORTED:
+				/* the file contents are neither FLAC nor Ogg FLAC: this is
+				 * an unsupported format, not a damaged FLAC stream */
+				flac__utils_printf(stderr, 1, "%s: ERROR: unsupported file format: input is neither a FLAC nor an Ogg FLAC stream\n", infilename);
+				log_unsupported_format(infilename);
+				flac__foreign_metadata_delete(foreign_metadata);
+				return 1;
+			default: /* CONTAINER_UNKNOWN: fall back to the file name extension */
+				if(infilename_length >= 4 && 0 == FLAC__STRCASECMP(infilename+(infilename_length-4), ".oga"))
+					treat_as_ogg = true;
+				else if(infilename_length >= 4 && 0 == FLAC__STRCASECMP(infilename+(infilename_length-4), ".ogg"))
+					treat_as_ogg = true;
+				else
+					treat_as_ogg = false;
+				break;
+		}
+	}
 
 #if !FLAC__HAS_OGG
 	if(treat_as_ogg) {
@@ -2018,6 +2096,7 @@ int decode_file(const char *infilename)
 	decode_options.relaxed_foreign_metadata_handling = option_values.keep_foreign_metadata_if_present;
 	decode_options.replaygain_synthesis_spec = option_values.replaygain_synthesis_spec;
 	decode_options.force_subformat = output_subformat;
+	decode_options.decode_log = option_values.decode_log;
 #if FLAC__HAS_OGG
 	decode_options.is_ogg = treat_as_ogg;
 	decode_options.decode_chained_stream = option_values.decode_chained_stream;

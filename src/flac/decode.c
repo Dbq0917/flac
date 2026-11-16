@@ -73,6 +73,9 @@ typedef struct {
 	FLAC__bool aborting_due_to_unparseable; /* true if we abort decoding because we hit an unparseable frame */
 	FLAC__bool error_callback_suppress_messages; /* turn on to prevent repeating messages from the error callback */
 	FLAC__bool warn_user_about_foreign_metadata; /* to prevent more than one warning message per file */
+	FLAC__bool got_decode_error; /* true once the decoder reports any frame-level error */
+	FLAC__bool valid_frame_after_error; /* true if a valid frame was decoded after the first decode error, i.e. damage is mid-stream rather than a truncated tail */
+	FLAC__bool truncated; /* true if the stream ended before all declared samples were decoded */
 
 	FLAC__bool iff_headers_need_fixup;
 
@@ -101,6 +104,7 @@ typedef struct {
 
 	clock_t old_clock;
 	FLAC__uint64 old_samples_processed;
+	const char *decode_log; /* NULL unless a decode log is requested */
 } DecoderSession;
 
 
@@ -110,11 +114,12 @@ static FLAC__bool is_big_endian_host_;
 /*
  * local routines
  */
-static FLAC__bool DecoderSession_construct(DecoderSession *d, FLAC__bool is_ogg, FLAC__bool decode_chained_stream, FLAC__bool use_first_serial_number, long serial_number, FileFormat format, FileSubFormat subformat, FLAC__bool treat_warnings_as_errors, FLAC__bool continue_through_decode_errors, FLAC__bool channel_map_none, FLAC__bool relaxed_foreign_metadata_handling, replaygain_synthesis_spec_t replaygain_synthesis_spec, FLAC__bool analysis_mode, analysis_options aopts, utils__SkipUntilSpecification *skip_specification, utils__SkipUntilSpecification *until_specification, utils__CueSpecification *cue_specification, foreign_metadata_t *foreign_metadata, const char *infilename, const char *outfilename);
+static FLAC__bool DecoderSession_construct(DecoderSession *d, FLAC__bool is_ogg, FLAC__bool decode_chained_stream, FLAC__bool use_first_serial_number, long serial_number, FileFormat format, FileSubFormat subformat, FLAC__bool treat_warnings_as_errors, FLAC__bool continue_through_decode_errors, FLAC__bool channel_map_none, FLAC__bool relaxed_foreign_metadata_handling, replaygain_synthesis_spec_t replaygain_synthesis_spec, FLAC__bool analysis_mode, analysis_options aopts, utils__SkipUntilSpecification *skip_specification, utils__SkipUntilSpecification *until_specification, utils__CueSpecification *cue_specification, foreign_metadata_t *foreign_metadata, const char *infilename, const char *outfilename, const char *decode_log);
 static void DecoderSession_destroy(DecoderSession *d, FLAC__bool error_occurred);
 static FLAC__bool DecoderSession_init_decoder(DecoderSession *d, const char *infilename);
 static FLAC__bool DecoderSession_process(DecoderSession *d);
 static FLAC__bool verify_streaminfo(DecoderSession *d, FLAC__bool md5_failure);
+static void DecoderSession_write_decode_log(DecoderSession *d, const char *status, const char *md5, const char *detail);
 static int DecoderSession_finish_ok(DecoderSession *d);
 static int DecoderSession_finish_error(DecoderSession *d);
 static FLAC__bool canonicalize_until_specification(utils__SkipUntilSpecification *spec, const char *inbasefilename, uint32_t sample_rate, FLAC__uint64 skip, FLAC__uint64 total_samples_in_input);
@@ -188,7 +193,8 @@ int flac__decode_file(const char *infilename, const char *outfilename, FLAC__boo
 			options.has_cue_specification? &options.cue_specification : 0,
 			options.format == FORMAT_RAW? NULL : options.format_options.iff.foreign_metadata,
 			infilename,
-			outfilename
+			outfilename,
+			options.decode_log
 		)
 	)
 		return 1;
@@ -203,7 +209,7 @@ int flac__decode_file(const char *infilename, const char *outfilename, FLAC__boo
 	return DecoderSession_finish_ok(&decoder_session);
 }
 
-FLAC__bool DecoderSession_construct(DecoderSession *d, FLAC__bool is_ogg, FLAC__bool decode_chained_stream, FLAC__bool use_first_serial_number, long serial_number, FileFormat format, FileSubFormat subformat, FLAC__bool treat_warnings_as_errors, FLAC__bool continue_through_decode_errors, FLAC__bool channel_map_none, FLAC__bool relaxed_foreign_metadata_handling, replaygain_synthesis_spec_t replaygain_synthesis_spec, FLAC__bool analysis_mode, analysis_options aopts, utils__SkipUntilSpecification *skip_specification, utils__SkipUntilSpecification *until_specification, utils__CueSpecification *cue_specification, foreign_metadata_t *foreign_metadata, const char *infilename, const char *outfilename)
+FLAC__bool DecoderSession_construct(DecoderSession *d, FLAC__bool is_ogg, FLAC__bool decode_chained_stream, FLAC__bool use_first_serial_number, long serial_number, FileFormat format, FileSubFormat subformat, FLAC__bool treat_warnings_as_errors, FLAC__bool continue_through_decode_errors, FLAC__bool channel_map_none, FLAC__bool relaxed_foreign_metadata_handling, replaygain_synthesis_spec_t replaygain_synthesis_spec, FLAC__bool analysis_mode, analysis_options aopts, utils__SkipUntilSpecification *skip_specification, utils__SkipUntilSpecification *until_specification, utils__CueSpecification *cue_specification, foreign_metadata_t *foreign_metadata, const char *infilename, const char *outfilename, const char *decode_log)
 {
 #if FLAC__HAS_OGG
 	d->is_ogg = is_ogg;
@@ -245,6 +251,9 @@ FLAC__bool DecoderSession_construct(DecoderSession *d, FLAC__bool is_ogg, FLAC__
 	d->aborting_due_to_until = false;
 	d->aborting_due_to_unparseable = false;
 	d->error_callback_suppress_messages = false;
+	d->got_decode_error = false;
+	d->valid_frame_after_error = false;
+	d->truncated = false;
 	if(relaxed_foreign_metadata_handling)
 		d->warn_user_about_foreign_metadata = false;
 	else
@@ -273,6 +282,7 @@ FLAC__bool DecoderSession_construct(DecoderSession *d, FLAC__bool is_ogg, FLAC__
 
 	d->old_clock = 0;
 	d->old_samples_processed = 0;
+	d->decode_log = decode_log;
 
 	FLAC__ASSERT(!(d->test_only && d->analysis_mode));
 
@@ -536,9 +546,39 @@ FLAC__bool DecoderSession_process(DecoderSession *d)
 		}
 	}
 #endif
+	/*
+	 * Detect a truncated stream: the decoder ran into the end of the file
+	 * before all samples declared in STREAMINFO were decoded, or decode
+	 * errors occurred without any valid frame following them (i.e. the
+	 * stream just stops, as opposed to corruption followed by more valid
+	 * frames).  A truncated stream is not a hard error: the samples decoded
+	 * so far are valid and are kept, only a warning is issued.
+	 */
 	if(
-		(d->abort_flag && !(d->aborting_due_to_until || d->continue_through_decode_errors)) ||
-		(FLAC__stream_decoder_get_state(d->decoder) > FLAC__STREAM_DECODER_END_OF_STREAM && !d->aborting_due_to_until)
+		!d->aborting_due_to_until &&
+		FLAC__stream_decoder_get_state(d->decoder) == FLAC__STREAM_DECODER_END_OF_STREAM &&
+		(
+			(d->got_decode_error && !d->valid_frame_after_error && d->samples_processed > 0) ||
+			(!d->got_decode_error && d->got_stream_info && d->total_samples > 0 && d->samples_processed < d->total_samples)
+		)
+	) {
+		d->truncated = true;
+		if(0 != d->outfilename && 0 != strcmp(d->outfilename, "-"))
+			d->iff_headers_need_fixup = true; /* make the output headers reflect the samples actually written */
+		stats_print_name_and_stream_number(1, d->inbasefilename, d->stream_counter);
+		flac__utils_printf(stderr, 1, "WARNING, input file is truncated, keeping the %" PRIu64 " samples decoded so far\n", d->samples_processed);
+		if(d->treat_warnings_as_errors) {
+			flac__utils_printf(stderr, 2, "\n");
+			print_error_with_state(d, "ERROR during decoding");
+			return false;
+		}
+	}
+	if(
+		!d->truncated &&
+		(
+			(d->abort_flag && !(d->aborting_due_to_until || d->continue_through_decode_errors)) ||
+			(FLAC__stream_decoder_get_state(d->decoder) > FLAC__STREAM_DECODER_END_OF_STREAM && !d->aborting_due_to_until)
+		)
 	) {
 		flac__utils_printf(stderr, 2, "\n");
 		print_error_with_state(d, "ERROR during decoding");
@@ -550,7 +590,7 @@ FLAC__bool DecoderSession_process(DecoderSession *d)
 
 	/* write padding bytes for alignment if necessary */
 	if(!d->analysis_mode && !d->test_only && d->format != FORMAT_RAW) {
-		const FLAC__uint64 data_size = d->total_samples * d->channels * ((d->bps+7)/8);
+		const FLAC__uint64 data_size = (d->truncated? d->samples_processed : d->total_samples) * d->channels * ((d->bps+7)/8);
 		uint32_t padding;
 		if(d->format != FORMAT_WAVE64) {
 			padding = (uint32_t)(data_size & 1);
@@ -580,7 +620,15 @@ FLAC__bool verify_streaminfo(DecoderSession *d, FLAC__bool md5_failure)
 {
 	FLAC__bool ok = true;
 
-	if(md5_failure) {
+	if(d->truncated) {
+		/* a truncated stream can never match the STREAMINFO MD5 or total
+		 * sample count; this was already warned about, so don't turn it
+		 * into an error here */
+		stats_print_name_and_stream_number(1, d->inbasefilename, d->stream_counter);
+		flac__utils_printf(stderr, 1, "WARNING, cannot check MD5 signature and total number of samples against STREAMINFO of truncated input\n");
+		ok = !d->treat_warnings_as_errors;
+	}
+	else if(md5_failure) {
 		stats_print_name_and_stream_number(1, d->inbasefilename, d->stream_counter);
 		flac__utils_printf(stderr, 1, "ERROR, MD5 signature mismatch\n");
 		ok = d->continue_through_decode_errors;
@@ -624,6 +672,12 @@ int DecoderSession_finish_ok(DecoderSession *d)
 	if(d->analysis_mode)
 		flac__analyze_finish(d->aopts);
 	ok = verify_streaminfo(d, md5_failure);
+	DecoderSession_write_decode_log(
+		d,
+		!ok? "failed" : d->truncated? "truncated" : "ok",
+		d->truncated? "unchecked" : md5_failure? "mismatch" : d->has_md5sum? "ok" : "unchecked",
+		d->truncated? "input file is truncated, partial output kept" : ""
+	);
 	DecoderSession_destroy(d, /*error_occurred=*/!ok);
 	if(!d->analysis_mode && !d->test_only && d->format != FORMAT_RAW) {
 		if(d->iff_headers_need_fixup || (!d->got_stream_info && strcmp(d->outfilename, "-"))) {
@@ -658,8 +712,38 @@ int DecoderSession_finish_error(DecoderSession *d)
 	}
 	if(d->analysis_mode)
 		flac__analyze_finish(d->aopts);
+	DecoderSession_write_decode_log(d, "failed", "unchecked", "decode error");
 	DecoderSession_destroy(d, /*error_occurred=*/true);
 	return 1;
+}
+
+void DecoderSession_write_decode_log(DecoderSession *d, const char *status, const char *md5, const char *detail)
+{
+	char line[4200];
+
+	if(0 == d->decode_log)
+		return;
+
+	snprintf(line, sizeof(line),
+		"file=%s output=%s container=%s sample_rate=%u channels=%u bits_per_sample=%u total_samples=%" PRIu64 " decoded_samples=%" PRIu64 " md5=%s status=%s detail=\"%s\"",
+		d->infilename,
+		0 == d->outfilename? "-" : d->outfilename,
+#if FLAC__HAS_OGG
+		d->is_ogg? "ogg-flac" : "flac",
+#else
+		"flac",
+#endif
+		d->sample_rate,
+		d->channels,
+		d->bps,
+		d->total_samples,
+		d->samples_processed,
+		md5,
+		status,
+		detail
+	);
+	if(!flac__utils_append_decode_log(d->decode_log, line))
+		flac__utils_printf(stderr, 1, "%s: WARNING, could not write to decode log %s\n", d->inbasefilename, d->decode_log);
 }
 
 FLAC__bool canonicalize_until_specification(utils__SkipUntilSpecification *spec, const char *inbasefilename, uint32_t sample_rate, FLAC__uint64 skip, FLAC__uint64 total_samples_in_input)
@@ -1275,6 +1359,9 @@ FLAC__StreamDecoderWriteStatus write_callback(const FLAC__StreamDecoder *decoder
 
 	(void)decoder;
 
+	if(decoder_session->got_decode_error)
+		decoder_session->valid_frame_after_error = true;
+
 	if(decoder_session->abort_flag)
 		return FLAC__STREAM_DECODER_WRITE_STATUS_ABORT;
 
@@ -1830,6 +1917,7 @@ void error_callback(const FLAC__StreamDecoder *decoder, FLAC__StreamDecoderError
 {
 	DecoderSession *decoder_session = (DecoderSession*)client_data;
 	(void)decoder;
+	decoder_session->got_decode_error = true;
 	if(!decoder_session->error_callback_suppress_messages) {
 		flac__utils_printf_clear_stats(stderr, 1, "%s: *** Got error code %d:%s after processing %" PRIu64 " samples\n", decoder_session->inbasefilename, status, FLAC__StreamDecoderErrorStatusString[status], decoder_session->samples_processed);
 	}
