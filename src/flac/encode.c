@@ -352,6 +352,10 @@ static FLAC__bool get_sample_info_wave(EncoderSession *e, encode_options_t optio
 			if(!read_uint16(e->fin, /*big_endian=*/false, &x, e->inbasefilename))
 				return false;
 			channels = (uint32_t)x;
+			if(channels == 0 || channels > FLAC__MAX_CHANNELS) {
+				flac__utils_printf(stderr, 1, "%s: ERROR: invalid WAVE number of channels %u: must be between 1 and %u\n", e->inbasefilename, channels, FLAC__MAX_CHANNELS);
+				return false;
+			}
 
 			/* sample rate */
 			if(!read_uint32(e->fin, /*big_endian=*/false, &xx, e->inbasefilename))
@@ -369,6 +373,11 @@ static FLAC__bool get_sample_info_wave(EncoderSession *e, encode_options_t optio
 			if(!read_uint16(e->fin, /*big_endian=*/false, &x, e->inbasefilename))
 				return false;
 			bps = (uint32_t)x;
+			/* sample containers are byte-aligned; format_input() supports these widths */
+			if(bps != 8 && bps != 16 && bps != 24 && bps != 32) {
+				flac__utils_printf(stderr, 1, "%s: ERROR: invalid WAVE bits-per-sample %u: must be 8, 16, 24, or 32\n", e->inbasefilename, bps);
+				return false;
+			}
 
 			e->info.is_unsigned_samples = (bps <= 8);
 
@@ -416,6 +425,10 @@ static FLAC__bool get_sample_info_wave(EncoderSession *e, encode_options_t optio
 					flac__utils_printf(stderr, 1, "%s: ERROR: invalid WAVEFORMATEXTENSIBLE chunk with wValidBitsPerSample (%u) > wBitsPerSample (%u)\n", e->inbasefilename, (uint32_t)x, bps);
 					return false;
 				}
+				if((uint32_t)x < 4 || (uint32_t)x > 32) {
+					flac__utils_printf(stderr, 1, "%s: ERROR: invalid WAVE valid bits-per-sample %u: must be between 4 and 32\n", e->inbasefilename, (uint32_t)x);
+					return false;
+				}
 				shift = bps - (uint32_t)x;
 				/* channel mask */
 				if(!read_uint32(e->fin, /*big_endian=*/false, &channel_mask, e->inbasefilename))
@@ -436,7 +449,7 @@ static FLAC__bool get_sample_info_wave(EncoderSession *e, encode_options_t optio
 				data_bytes -= 26;
 			}
 
-			e->info.bytes_per_wide_sample = channels * (bps / 8);
+			e->info.bytes_per_wide_sample = channels * ((bps + 7) / 8);
 
 			/* skip any extra data in the fmt chunk */
 			if(!fskip_ahead(e->fin, data_bytes)) {
@@ -942,6 +955,10 @@ int flac__encode_file(FILE *infile, FLAC__off_t infilesize, const char *infilena
 	}
 	if(encoder_session.info.bits_per_sample-encoder_session.info.shift < 4 || encoder_session.info.bits_per_sample-encoder_session.info.shift > 32) {
 		flac__utils_printf(stderr, 1, "%s: ERROR: unsupported bits-per-sample %u\n", encoder_session.inbasefilename, encoder_session.info.bits_per_sample-encoder_session.info.shift);
+		return EncoderSession_finish_error(&encoder_session);
+	}
+	if((options.format == FORMAT_RAW || EncoderSession_format_is_iff(&encoder_session)) && encoder_session.info.bytes_per_wide_sample == 0) {
+		flac__utils_printf(stderr, 1, "%s: ERROR: invalid input format: channels=%u and bits-per-sample=%u yield zero bytes per sample\n", encoder_session.inbasefilename, encoder_session.info.channels, encoder_session.info.bits_per_sample);
 		return EncoderSession_finish_error(&encoder_session);
 	}
 

@@ -972,6 +972,95 @@ foo:
 	return false;
 }
 
+/* Writes a minimal WAVE_FORMAT_EXTENSIBLE file with unchecked fmt fields, for
+ * testing the encoder's validation of malformed user-supplied headers. */
+static FLAC__bool generate_wav_header_anomaly(const char *filename, unsigned channels, unsigned container_bps, unsigned valid_bps)
+{
+	const unsigned bytes_per_sample = (container_bps + 7) / 8;
+	const unsigned block_align = channels * bytes_per_sample;
+	const unsigned data_size = block_align ? block_align * 4 : 16;
+	FILE *f;
+	unsigned i;
+
+	if(0 == (f = fopen(filename, "wb")))
+		return false;
+	if(fwrite("RIFF", 1, 4, f) < 4)
+		goto foo;
+	if(!write_little_endian_uint32(f, 4 + 8 + 40 + 8 + data_size))
+		goto foo;
+	if(fwrite("WAVEfmt ", 1, 8, f) < 8)
+		goto foo;
+	if(!write_little_endian_uint32(f, 40))
+		goto foo;
+	if(!write_little_endian_uint16(f, 65534)) /* WAVE_FORMAT_EXTENSIBLE */
+		goto foo;
+	if(!write_little_endian_uint16(f, (FLAC__uint16)channels))
+		goto foo;
+	if(!write_little_endian_uint32(f, 44100))
+		goto foo;
+	if(!write_little_endian_uint32(f, 44100 * block_align))
+		goto foo;
+	if(!write_little_endian_uint16(f, (FLAC__uint16)block_align))
+		goto foo;
+	if(!write_little_endian_uint16(f, (FLAC__uint16)container_bps))
+		goto foo;
+	if(!write_little_endian_uint16(f, 22)) /* cbSize */
+		goto foo;
+	if(!write_little_endian_uint16(f, (FLAC__uint16)valid_bps))
+		goto foo;
+	if(!write_little_endian_uint32(f, 0)) /* channel mask */
+		goto foo;
+	/* GUID = {0x00000001, 0x0000, 0x0010, {0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71}} */
+	if(fwrite("\x01\x00\x00\x00\x00\x00\x10\x00\x80\x00\x00\xaa\x00\x38\x9b\x71", 1, 16, f) != 16)
+		goto foo;
+	if(fwrite("data", 1, 4, f) < 4)
+		goto foo;
+	if(!write_little_endian_uint32(f, data_size))
+		goto foo;
+	for(i = 0; i < data_size; i++)
+		if(fputc(0, f) == EOF)
+			goto foo;
+
+	fclose(f);
+	return true;
+foo:
+	fclose(f);
+	return false;
+}
+
+static FLAC__bool generate_wav_header_anomalies(void)
+{
+	static const struct {
+		const char *filename;
+		unsigned channels;
+		unsigned container_bps;
+		unsigned valid_bps;
+	} cases[] = {
+		{ "bad-wav-bps-0.wav",      2,     0,  0 },
+		{ "bad-wav-bps-4.wav",      2,     4,  4 },
+		{ "bad-wav-bps-5.wav",      2,     5,  5 },
+		{ "bad-wav-bps-6.wav",      2,     6,  6 },
+		{ "bad-wav-bps-7.wav",      2,     7,  7 },
+		{ "bad-wav-bps-9.wav",      2,     9,  9 },
+		{ "bad-wav-bps-12.wav",     2,    12, 12 },
+		{ "bad-wav-bps-20.wav",     2,    20, 20 },
+		{ "bad-wav-bps-33.wav",     2,    33, 33 },
+		{ "bad-wav-bps-65535.wav",  2, 65535, 32 },
+		{ "bad-wav-valid-0.wav",    2,    16,  0 },
+		{ "bad-wav-valid-3.wav",    2,    16,  3 },
+		{ "bad-wav-valid-33.wav",   2,    16, 33 },
+		{ "bad-wav-channels-0.wav", 0,    16, 16 },
+		{ "bad-wav-channels-9.wav", 9,    16, 16 }
+	};
+	size_t i;
+
+	for(i = 0; i < sizeof(cases)/sizeof(cases[0]); i++)
+		if(!generate_wav_header_anomaly(cases[i].filename, cases[i].channels, cases[i].container_bps, cases[i].valid_bps))
+			return false;
+
+	return true;
+}
+
 static FLAC__bool generate_wackywavs(void)
 {
 	FILE *f;
@@ -1491,6 +1580,7 @@ int main(int argc, char *argv[])
 	if(!generate_noise("noise.raw", 65536 * 8 * 3)) return 1;
 	if(!generate_noise("noise8m32.raw", 32)) return 1;
 	if(!generate_wackywavs()) return 1;
+	if(!generate_wav_header_anomalies()) return 1;
 	if(!generate_wackywav_cbsize0()) return 1;
 	if(!generate_wackywav64s()) return 1;
 	if(!generate_wackywav64_cbsize0()) return 1;

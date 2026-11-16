@@ -25,6 +25,7 @@ check_SCRIPTS = \
 	test_libFLAC++.sh \
 	test_grabbag.sh \
 	test_flac.sh \
+	test_wav_header_validation.sh \
 	test_metaflac.sh \
 	test_replaygain.sh \
 	test_seeking.sh \
@@ -39,6 +40,7 @@ if FLaC__WITH_CPPLIBS
 endif
 	$(TESTS_ENVIRONMENT) $(srcdir)/test_grabbag.sh
 	$(TESTS_ENVIRONMENT) $(srcdir)/test_flac.sh
+	$(TESTS_ENVIRONMENT) $(srcdir)/test_wav_header_validation.sh
 	$(TESTS_ENVIRONMENT) $(srcdir)/test_metaflac.sh
 	$(TESTS_ENVIRONMENT) $(srcdir)/test_replaygain.sh
 	$(TESTS_ENVIRONMENT) $(srcdir)/test_seeking.sh
